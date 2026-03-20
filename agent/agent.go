@@ -425,10 +425,15 @@ func (a *Agent) runInputs(
 		}
 
 		var ticker Ticker
+		var err error
 		if a.Config.Agent.RoundInterval {
-			ticker = NewAlignedTicker(startTime, interval, jitter, offset)
+			ticker, err = NewAlignedTicker(startTime, interval, jitter, offset)
 		} else {
-			ticker = NewUnalignedTicker(interval, jitter, offset)
+			ticker, err = NewUnalignedTicker(interval, jitter, offset)
+		}
+		if err != nil {
+			log.Printf("E! [agent] Error creating ticker for input %s: %v", input.LogName(), err)
+			continue
 		}
 		tickers = append(tickers, ticker)
 

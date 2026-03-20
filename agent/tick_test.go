@@ -119,47 +119,80 @@ func TestAlignedTickerOffset(t *testing.T) {
 	require.Equal(t, expected, actual)
 }
 
-func TestAlignedTickerNegativeOffset(t *testing.T) {
-	interval := 30 * time.Second
-	jitter := 0 * time.Second
-	offset := -15 * time.Second
-
-	clk := clock.NewMock()
-	since := clk.Now()
-	until := since.Add(120 * time.Second)
-
-	ticker := &AlignedTicker{
-		interval:    interval,
-		jitter:      jitter,
-		offset:      offset,
-		minInterval: interval / 100,
+func TestValidateOffset(t *testing.T) {
+	tests := []struct {
+		name     string
+		offset   time.Duration
+		interval time.Duration
+		errMsg   string
+	}{
+		{
+			name:     "valid zero offset",
+			offset:   0,
+			interval: 10 * time.Second,
+		},
+		{
+			name:     "valid positive offset",
+			offset:   3 * time.Second,
+			interval: 10 * time.Second,
+		},
+		{
+			name:     "offset equal to interval",
+			offset:   10 * time.Second,
+			interval: 10 * time.Second,
+		},
+		{
+			name:     "negative offset rejected",
+			offset:   -3 * time.Second,
+			interval: 10 * time.Second,
+			errMsg:   "negative collection_offset is not supported",
+		},
+		{
+			name:     "negative offset suggests alternative",
+			offset:   -3 * time.Second,
+			interval: 10 * time.Second,
+			errMsg:   `use collection_offset = "7s" instead of "-3s"`,
+		},
+		{
+			name:     "offset exceeds interval",
+			offset:   15 * time.Second,
+			interval: 10 * time.Second,
+			errMsg:   "exceeds interval",
+		},
+		{
+			name:     "negative interval rejected",
+			offset:   0,
+			interval: -10 * time.Second,
+			errMsg:   "interval must be a positive duration",
+		},
+		{
+			name:     "zero interval rejected",
+			offset:   0,
+			interval: 0,
+			errMsg:   "interval must be a positive duration",
+		},
 	}
-	ticker.start(since, clk)
-	defer ticker.Stop()
 
-	// With interval=30s and offset=-15s, the offset is normalized to 15s, so
-	// ticks should occur at:
-	// 15s (30s aligned + 15s offset = 15s)
-	// 45s (next aligned 60s would give 45s, but 30s aligned gives 0s+30s = 30s wait from 15s = 45s)
-	// 75s, 105s, etc.
-	expected := []time.Time{
-		time.Unix(15, 0).UTC(),
-		time.Unix(45, 0).UTC(),
-		time.Unix(75, 0).UTC(),
-		time.Unix(105, 0).UTC(),
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateOffset(tt.offset, tt.interval)
+			if tt.errMsg != "" {
+				require.ErrorContains(t, err, tt.errMsg)
+			} else {
+				require.NoError(t, err)
+			}
+		})
 	}
+}
 
-	actual := make([]time.Time, 0)
-	for !clk.Now().After(until) {
-		select {
-		case tm := <-ticker.Elapsed():
-			actual = append(actual, tm.UTC())
-		default:
-		}
-		clk.Add(1 * time.Second)
-	}
+func TestNewAlignedTickerRejectsNegativeOffset(t *testing.T) {
+	_, err := NewAlignedTicker(time.Now(), 10*time.Second, 0, -3*time.Second)
+	require.ErrorContains(t, err, "negative collection_offset is not supported")
+}
 
-	require.Equal(t, expected, actual)
+func TestNewUnalignedTickerRejectsNegativeOffset(t *testing.T) {
+	_, err := NewUnalignedTicker(10*time.Second, 0, -3*time.Second)
+	require.ErrorContains(t, err, "negative collection_offset is not supported")
 }
 
 func TestAlignedTickerMissedTick(t *testing.T) {
@@ -305,32 +338,6 @@ func TestAlignedTickerDistributionWithOffset(t *testing.T) {
 	interval := 10 * time.Second
 	jitter := 5 * time.Second
 	offset := 3 * time.Second
-
-	clk := clock.NewMock()
-	since := clk.Now()
-
-	ticker := &AlignedTicker{
-		interval:    interval,
-		jitter:      jitter,
-		offset:      offset,
-		minInterval: interval / 100,
-	}
-	ticker.start(since, clk)
-	defer ticker.Stop()
-	dist := simulatedDist(ticker, clk)
-	printDist(dist)
-	require.Less(t, 350, dist.Count)
-	require.True(t, 9 < dist.Mean() && dist.Mean() < 11)
-}
-
-func TestAlignedTickerDistributionWithNegativeOffset(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping test in short mode.")
-	}
-
-	interval := 10 * time.Second
-	jitter := 5 * time.Second
-	offset := -3 * time.Second
 
 	clk := clock.NewMock()
 	since := clk.Now()

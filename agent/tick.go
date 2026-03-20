@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -39,15 +40,18 @@ type AlignedTicker struct {
 	wg          sync.WaitGroup
 }
 
-func NewAlignedTicker(now time.Time, interval, jitter, offset time.Duration) *AlignedTicker {
+func NewAlignedTicker(now time.Time, interval, jitter, offset time.Duration) (*AlignedTicker, error) {
+	if err := validateOffset(offset, interval); err != nil {
+		return nil, err
+	}
 	t := &AlignedTicker{
 		interval:    interval,
 		jitter:      jitter,
-		offset:      normalizeOffset(offset, interval),
+		offset:      offset,
 		minInterval: interval / 100,
 	}
 	t.start(now, clock.New())
-	return t
+	return t, nil
 }
 
 func (t *AlignedTicker) start(now time.Time, clk clock.Clock) {
@@ -78,13 +82,6 @@ func (t *AlignedTicker) next(now time.Time) time.Duration {
 		d = t.interval
 	}
 	d += t.offset
-
-	// Ensure the duration is positive before adding jitter. This can still
-	// happen with small intervals and clock adjustments.
-	if d <= 0 {
-		d += t.interval
-	}
-
 	d += internal.RandomDuration(t.jitter)
 	return d
 }
@@ -135,25 +132,33 @@ type UnalignedTicker struct {
 	wg       sync.WaitGroup
 }
 
-func NewUnalignedTicker(interval, jitter, offset time.Duration) *UnalignedTicker {
+func NewUnalignedTicker(interval, jitter, offset time.Duration) (*UnalignedTicker, error) {
+	if err := validateOffset(offset, interval); err != nil {
+		return nil, err
+	}
 	t := &UnalignedTicker{
 		interval: interval,
 		jitter:   jitter,
-		offset:   normalizeOffset(offset, interval),
+		offset:   offset,
 	}
 	t.start(clock.New())
-	return t
+	return t, nil
 }
 
-func normalizeOffset(offset, interval time.Duration) time.Duration {
-	if interval <= 0 || offset == 0 {
-		return offset
+func validateOffset(offset, interval time.Duration) error {
+	if interval <= 0 {
+		return fmt.Errorf("interval must be a positive duration, got %s", interval)
 	}
-	offset = offset % interval
 	if offset < 0 {
-		offset += interval
+		return fmt.Errorf(
+			"negative collection_offset is not supported, use collection_offset = %q instead of %q",
+			interval+offset, offset,
+		)
 	}
-	return offset
+	if offset > interval {
+		return fmt.Errorf("collection_offset %s exceeds interval %s", offset, interval)
+	}
+	return nil
 }
 
 func (t *UnalignedTicker) start(clk clock.Clock) {
@@ -175,7 +180,7 @@ func (t *UnalignedTicker) start(clk clock.Clock) {
 }
 
 func sleep(ctx context.Context, duration time.Duration, clk clock.Clock) error {
-	if duration <= 0 {
+	if duration == 0 {
 		return nil
 	}
 
